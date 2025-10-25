@@ -1,0 +1,282 @@
+"""
+ML API Service
+Exposes ML models as REST API endpoints
+"""
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List, Dict, Optional
+import sys
+import os
+
+# Add parent directory to path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from recommendation_engine import RecommendationEngine
+from adaptive_assessment import AdaptiveAssessmentEngine
+from predictive_analytics import PredictiveAnalyticsEngine
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(title="E-Learning ML API", version="1.0.0")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+# Initialize ML engines
+recommender = RecommendationEngine()
+adaptive_engine = AdaptiveAssessmentEngine()
+predictive_engine = PredictiveAnalyticsEngine()
+
+# Load pre-trained models
+recommender.load_model()
+adaptive_engine.load_model()
+predictive_engine.load_model()
+
+
+# ============= Request/Response Models =============
+
+class RecommendationRequest(BaseModel):
+    user_id: str
+    top_n: int = 10
+
+
+class RecommendationResponse(BaseModel):
+    user_id: str
+    recommendations: List[Dict]
+
+
+class AdaptiveQuizRequest(BaseModel):
+    student_id: str
+    question_pool: List[Dict]
+    num_questions: int = 10
+    initial_ability: float = 0.0
+
+
+class AbilityUpdateRequest(BaseModel):
+    student_id: str
+    question: Dict
+    is_correct: bool
+    time_taken_seconds: int
+
+
+class DropoutPredictionRequest(BaseModel):
+    user_data: Dict
+
+
+class EngagementRequest(BaseModel):
+    user_data: Dict
+
+
+class LearningPathRequest(BaseModel):
+    user_data: Dict
+    available_courses: List[Dict]
+    num_recommendations: int = 5
+
+
+# ============= Recommendation Endpoints =============
+
+@app.post("/api/ml/recommendations", response_model=RecommendationResponse)
+async def get_recommendations(request: RecommendationRequest):
+    """Get personalized course recommendations"""
+    try:
+        recommendations = recommender.hybrid_recommendations(
+            request.user_id,
+            top_n=request.top_n
+        )
+        
+        if not recommendations:
+            # Fallback to cold start
+            recommendations = recommender.cold_start_recommendations(
+                top_n=request.top_n
+            )
+        
+        return {
+            "user_id": request.user_id,
+            "recommendations": recommendations
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ml/recommendations/cold-start")
+async def get_cold_start_recommendations(
+    categories: Optional[List[str]] = None,
+    difficulty: str = "beginner",
+    top_n: int = 10
+):
+    """Get recommendations for new users"""
+    try:
+        recommendations = recommender.cold_start_recommendations(
+            categories=categories,
+            difficulty=difficulty,
+            top_n=top_n
+        )
+        return {"recommendations": recommendations}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============= Adaptive Assessment Endpoints =============
+
+@app.post("/api/ml/adaptive-quiz")
+async def generate_adaptive_quiz(request: AdaptiveQuizRequest):
+    """Generate adaptive quiz tailored to student ability"""
+    try:
+        quiz_questions = adaptive_engine.generate_adaptive_quiz(
+            request.student_id,
+            request.question_pool,
+            request.num_questions,
+            request.initial_ability
+        )
+        return {
+            "student_id": request.student_id,
+            "questions": quiz_questions
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ml/estimate-ability")
+async def estimate_ability(
+    student_id: str,
+    question_history: List[Dict]
+):
+    """Estimate student ability from question history"""
+    try:
+        ability = adaptive_engine.estimate_student_ability(
+            student_id,
+            question_history
+        )
+        return {
+            "student_id": student_id,
+            "estimated_ability": ability
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ml/update-ability")
+async def update_ability_realtime(request: AbilityUpdateRequest):
+    """Update student ability in real-time after answering a question"""
+    try:
+        updated_ability = adaptive_engine.update_ability_realtime(
+            request.student_id,
+            request.question,
+            request.is_correct,
+            request.time_taken_seconds
+        )
+        return {
+            "student_id": request.student_id,
+            "updated_ability": updated_ability
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ml/performance-metrics")
+async def get_performance_metrics(
+    student_id: str,
+    quiz_history: List[Dict]
+):
+    """Get comprehensive performance metrics"""
+    try:
+        metrics = adaptive_engine.get_performance_metrics(
+            student_id,
+            quiz_history
+        )
+        return {
+            "student_id": student_id,
+            "metrics": metrics
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============= Predictive Analytics Endpoints =============
+
+@app.post("/api/ml/predict-dropout")
+async def predict_dropout(request: DropoutPredictionRequest):
+    """Predict dropout risk for a user"""
+    try:
+        prediction = predictive_engine.predict_dropout_risk(request.user_data)
+        return prediction
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ml/engagement-score")
+async def calculate_engagement(request: EngagementRequest):
+    """Calculate user engagement score"""
+    try:
+        score = predictive_engine.calculate_engagement_score(request.user_data)
+        return {
+            "engagement_score": score,
+            "level": "high" if score > 75 else "medium" if score > 50 else "low"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ml/predict-success")
+async def predict_success(
+    user_data: Dict,
+    course_difficulty: str
+):
+    """Predict probability of course success"""
+    try:
+        probability = predictive_engine.predict_success_probability(
+            user_data,
+            course_difficulty
+        )
+        return {
+            "success_probability": probability,
+            "confidence": "high" if probability > 0.7 else "medium" if probability > 0.4 else "low"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ml/learning-path")
+async def recommend_learning_path(request: LearningPathRequest):
+    """Recommend optimal learning path"""
+    try:
+        path = predictive_engine.recommend_learning_path(
+            request.user_data,
+            request.available_courses,
+            request.num_recommendations
+        )
+        return {"learning_path": path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ml/performance-insights")
+async def get_performance_insights(user_data: Dict):
+    """Get comprehensive performance insights"""
+    try:
+        insights = predictive_engine.generate_performance_insights(user_data)
+        return insights
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/ml/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "models_loaded": {
+            "recommender": recommender.user_item_matrix is not None,
+            "adaptive": len(adaptive_engine.student_abilities) > 0,
+            "predictive": predictive_engine.feature_names != []
+        }
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8001)
